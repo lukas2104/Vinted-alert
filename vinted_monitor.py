@@ -1,10 +1,7 @@
 import os
 import json
-import hashlib
 from pathlib import Path
-
-import requests
-from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 
 SEARCH_URL = os.environ["VINTED_SEARCH_URL"]
@@ -24,55 +21,67 @@ def load_seen():
 
 
 def save_seen(items):
-    STATE_FILE.write_text(json.dumps(list(items)))
+    STATE_FILE.write_text(
+        json.dumps(list(items), ensure_ascii=False)
+    )
 
 
 def get_items():
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
 
-    response = requests.get(
-        SEARCH_URL,
-        headers=headers,
-        timeout=20
-    )
-    response.raise_for_status()
+        page = browser.new_page(
+            viewport={
+                "width": 1280,
+                "height": 900
+            },
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            )
+        )
 
-    soup = BeautifulSoup(response.text, "html.parser")
+        page.goto(
+            SEARCH_URL,
+            wait_until="domcontentloaded",
+            timeout=30000
+        )
 
-    items = []
+        page.wait_for_timeout(5000)
 
-    for link in soup.find_all("a", href=True):
-        href = link["href"]
+        items = page.locator('a[href*="/items/"]').evaluate_all(
+            """
+            links => links.map(link => ({
+                url: link.href,
+                title: link.innerText.trim()
+            }))
+            """
+        )
 
-        if "/items/" not in href:
-            continue
+        browser.close()
 
-        title = link.get_text(" ", strip=True)
-
-        if not title:
-            continue
-
-        if href.startswith("/"):
-            href = "https://www.vinted.de" + href
-
-        item_id = hashlib.sha256(href.encode()).hexdigest()
-
-        items.append({
-            "id": item_id,
-            "title": title,
-            "url": href
-        })
-
-    unique = {}
+    result = {}
+    
     for item in items:
-        unique[item["id"]] = item
+        if not item["url"]:
+            continue
 
-    return list(unique.values())
+        if item["url"] in result:
+            continue
+
+        result[item["url"]] = {
+            "url": item["url"],
+            "title": item["title"] or "Vinted Artikel"
+        }
+
+    return list(result.values())
 
 
 def send_discord(item):
+    import requests
+
     message = {
         "content": (
             "🚨 **NEUER VINTED-TREFFER**\n\n"
@@ -86,6 +95,7 @@ def send_discord(item):
         json=message,
         timeout=20
     )
+
     response.raise_for_status()
 
 
@@ -93,26 +103,39 @@ def main():
     seen = load_seen()
     items = get_items()
 
-    current_ids = {item["id"] for item in items}
+    current_ids = {
+        item["url"]
+        for item in items
+    }
 
-    new_items = [
-        item for item in items
-        if item["id"] not in seen
-    ]
-
-    # Beim ersten Lauf nichts spammen:
-    # Die vorhandenen Artikel werden nur gespeichert.
+    # Beim ersten Durchlauf werden vorhandene Artikel
+    # nur gespeichert und nicht als neue Treffer gemeldet.
     if not seen:
         save_seen(current_ids)
-        print(f"Erster Lauf: {len(items)} Artikel gespeichert.")
+        print(
+            f"Erster Durchlauf: "
+            f"{len(items)} Artikel gespeichert."
+        )
         return
 
+    new_items = [
+        item
+        for item in items
+        if item["url"] not in seen
+    ]
+
     for item in new_items:
-        send_discord(item)
         print(f"Neuer Treffer: {item['url']}")
+        send_discord(item)
 
     save_seen(seen | current_ids)
+
+    print(
+        f"Gefunden: {len(items)} | "
+        f"Neu: {len(new_items)}"
+    )
 
 
 if __name__ == "__main__":
     main()
+        
