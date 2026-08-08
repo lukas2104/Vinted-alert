@@ -51,7 +51,7 @@ def get_items():
 
         page.wait_for_timeout(5000)
 
-        items = page.locator('a[href*="/items/"]').evaluate_all(
+        items = page.locator('a[href*="/items/"]')
             """
             links => links.map(link => ({
                 url: link.href,
