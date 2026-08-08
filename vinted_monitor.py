@@ -51,9 +51,7 @@ def get_items():
 
         page.wait_for_timeout(5000)
 
-        items = page.locator('a[href*="/items/"]').evaluate_all("""
-print("GEFUNDENE VINTED-LINKS:", len(items))
-    links => links.map(link => ({
+        items = page.locator('a[href*="/items/"]').evaluate_all("""links => links.map(link => ({
         url: link.href,
         title: link.innerText.trim()
     }))
